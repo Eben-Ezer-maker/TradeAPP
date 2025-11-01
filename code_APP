@@ -1,0 +1,380 @@
+#code_App
+
+from pathlib import Path
+import pandas as pd
+import numpy as np
+import streamlit as st
+
+
+# ====================================================
+# 1) ACCÈS AUX DONNÉES
+# ====================================================
+def resolve_data_path() -> str:
+    base = Path(__file__).parent if "__file__" in globals() else Path.cwd()
+    candidates = [
+        base / "data" / "wits_product_tariffs.csv",
+        base / "wits_product_tariffs.csv",
+        base.parent / "TradeApp" / "data" / "wits_product_tariffs.csv",
+    ]
+    for p in candidates:
+        if p.exists():
+            return str(p)
+    raise FileNotFoundError("Impossible de trouver 'wits_product_tariffs.csv'.")
+
+DATA_PATH = resolve_data_path()
+
+
+# ====================================================
+# 2) DONNÉES
+# ====================================================
+def load_data() -> pd.DataFrame:
+    df = pd.read_csv(DATA_PATH)
+    df["product_label"] = df["product_code"].astype(str) + " - " + df["product_name"]
+    return df
+
+
+# ====================================================
+# 3) MOTEUR ÉCONOMIQUE
+#    Monotonie imposée : Δ droit > 0 => flux ↓
+#    Élasticité effective >= 0 (valeur absolue)
+#    + recettes tarifaires côté importateur (approx.)
+# ====================================================
+def apply_tariff_change(row: pd.Series, market: str, new_tariff: float, elast_scale: float = 1.0) -> pd.Series:
+    """
+    Logique : une HAUSSE du droit réduit les importations du marché (donc les exports du partenaire).
+    new_tariff et original_tariff sont des taux en % (niveau).
+    """
+    original_tariff = float(row[market])
+    baseline_flow = float(row["baseline_flow"])
+
+    # Élasticité effective (réactivité en valeur absolue), modulable
+    elasticity_eff = abs(float(row["elasticity"])) * float(elast_scale)
+
+    # Variation relative du droit par rapport au niveau initial (delta > 0 si le droit MONTE)
+    # ex : original=10, new=12 => delta=(12-10)/10=+0.2
+    delta = (float(new_tariff) - original_tariff) / max(original_tariff, 1e-6)
+
+    # Transmission monotone : hausse du droit => (1 - e*delta)
+    adjusted_flow = baseline_flow * (1 - elasticity_eff * delta)
+    adjusted_flow = max(adjusted_flow, 0.0)
+
+    flow_change = adjusted_flow - baseline_flow
+    flow_change_pct = (flow_change / baseline_flow * 100) if baseline_flow else 0.0
+
+    # Recettes tarifaires importateur (approx statique)
+    rev_base = baseline_flow * (original_tariff / 100.0)
+    rev_new  = adjusted_flow * (float(new_tariff) / 100.0)
+    rev_delta = rev_new - rev_base
+
+    return pd.Series({
+        "original_tariff": original_tariff,
+        "new_tariff": float(new_tariff),
+        "baseline_flow": baseline_flow,
+        "adjusted_flow": adjusted_flow,
+        "flow_change": flow_change,
+        "flow_change_pct": flow_change_pct,
+        "tariff_revenue_baseline": rev_base,
+        "tariff_revenue_new": rev_new,
+        "tariff_revenue_delta": rev_delta,
+    })
+
+
+# ====================================================
+# 4) RECOMMANDATIONS DIFFÉRENCIÉES
+# ====================================================
+def recommend_policy_dual(avg_change_pct_partner: float, country_label: str, market_raised: bool) -> str:
+    """
+    country_label = pays qui modifie ses droits (importateur).
+    avg_change_pct_partner = variation moyenne (%) des exports du partenaire.
+    market_raised = True s'il y a au moins une hausse de droit.
+    """
+    msgs = []
+
+    # Partenaire (exportateur vers le marché impacté)
+    if market_raised and avg_change_pct_partner < 0:
+        msgs.append(
+            "📉 **Partenaire (exportateur)** : pertes attendues (exports en baisse). "
+            "Mesures : diversification des marchés, stratégie prix/qualité, recherche de préférences, "
+            "renégociation de contingents, soutien à la montée en gamme."
+        )
+    elif avg_change_pct_partner > 0:
+        msgs.append(
+            "📈 **Partenaire (exportateur)** : opportunité (droit moyen en baisse). "
+            "Consolider les gains : contrats long terme, sécurisation logistique, veille concurrentielle."
+        )
+    else:
+        msgs.append(
+            "➡️ **Partenaire (exportateur)** : impact limité à ce stade. "
+            "Surveiller la demande et les risques de rétorsion."
+        )
+
+    # Importateur (pays qui modifie ses droits)
+    if market_raised:
+        msgs.append(
+            f"🛡️ **{country_label} (importateur)** : hausse des droits ⇒ pression sur les prix domestiques et risque de riposte. "
+            "Mesures : ciblage fin des lignes sensibles, exemptions temporaires, compensations pour filières aval, "
+            "communication claire pour réduire l'incertitude."
+        )
+    else:
+        msgs.append(
+            f"🤝 **{country_label} (importateur)** : baisse/stabilité des droits ⇒ soutien au pouvoir d’achat et aux chaînes d’approvisionnement. "
+            "Rester vigilant sur la dépendance et prévoir des clauses de sauvegarde."
+        )
+    return "\n\n".join(msgs)
+
+
+# ====================================================
+# 5) UI STREAMLIT
+# ====================================================
+def main() -> None:
+    st.set_page_config(page_title="TradeApp", layout="wide")
+    st.title("TradeApp v3 – Impacts bilatéraux USA/Chine")
+
+    df = load_data()
+
+    # ----- Sidebar : paramètres -----
+    st.sidebar.header("Paramètres de simulation")
+
+    selected_products = st.sidebar.multiselect(
+        "Produits à analyser",
+        options=df["product_label"],
+        default=df["product_label"].tolist()[:3],
+    )
+
+    market_option = st.sidebar.radio(
+        "Marché impacté (qui modifie ses droits)",
+        ("us_tariff", "chinese_tariff"),
+        format_func=lambda x: "États-Unis (importations US)" if x == "us_tariff" else "Chine (importations Chine)",
+    )
+
+    country_label = "États-Unis" if market_option == "us_tariff" else "Chine"
+    partner_label = "Chine → USA" if market_option == "us_tariff" else "USA → Chine"
+
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Variation uniforme (signe intuitif)")
+
+    # + = hausse du droit ; − = baisse
+    uniform_mode = st.sidebar.selectbox(
+        "Type de variation uniforme",
+        ["Points (p.p.)", "Pourcentage relatif du droit (%)"],
+        index=0
+    )
+
+    if uniform_mode == "Points (p.p.)":
+        uniform_change_points = st.sidebar.slider(
+            "Δ droit en points (p.p.)",
+            min_value=-20.0, max_value=20.0, value=0.0, step=0.5,
+            help="Positif = hausse du droit ; Négatif = baisse."
+        )
+        uniform_change_pct_rel = None
+    else:
+        uniform_change_pct_rel = st.sidebar.slider(
+            "Δ droit en % relatif",
+            min_value=-100.0, max_value=100.0, value=0.0, step=1.0,
+            help="Ex. +10% => droit x1,10 ; -10% => droit x0,90."
+        )
+        uniform_change_points = None
+
+    # Sensibilité (multiplie l'élasticité en valeur absolue)
+    st.sidebar.markdown("---")
+    elast_scale = st.sidebar.slider(
+        "Sensibilité (× élasticité)",
+        min_value=0.25, max_value=2.0, value=1.0, step=0.25,
+        help=">1 amplifie la réaction des flux ; <1 l'atténue."
+    )
+
+    # ----- Filtrage produits -----
+    filtered_df = df[df["product_label"].isin(selected_products)].copy()
+    if filtered_df.empty:
+        st.warning("Sélectionnez au moins un produit pour lancer la simulation.")
+        return
+
+    # Baseline = imports du marché impacté (≃ exports du partenaire)
+    baseline_col = "us_imports_musd" if market_option == "us_tariff" else "china_imports_musd"
+    filtered_df["baseline_flow"] = filtered_df[baseline_col]
+
+    # ----- Pré-remplissage tarif uniforme -----
+    if uniform_mode == "Points (p.p.)":
+        filtered_df["uniform_tariff"] = (filtered_df[market_option] + uniform_change_points).clip(lower=0)
+    else:
+        factor = 1 + (uniform_change_pct_rel / 100.0)  # + = hausse
+        filtered_df["uniform_tariff"] = (filtered_df[market_option] * factor).clip(lower=0)
+
+    # ----- Réglage par produit -----
+    st.subheader("Paramétrage des droits par produit")
+
+    per_product_mode = st.radio(
+        "Mode de saisie par produit",
+        ["Définir le nouveau niveau de droit (%)", "Définir une variation en points (p.p.)", "Définir une variation relative (%)"],
+        horizontal=True
+    )
+
+    tariff_inputs = {}
+    cols = st.columns(min(3, len(filtered_df)))
+
+    # Inputs par produit (signe cohérent : + = hausse)
+    for idx, (_, row) in enumerate(filtered_df.iterrows()):
+        with cols[idx % len(cols)]:
+            base = float(row[market_option])
+            default_level = float(row["uniform_tariff"])
+
+            if per_product_mode.startswith("Définir le nouveau niveau"):
+                val = st.number_input(
+                    f"{row['product_name']} – Nouveau droit (%)",
+                    min_value=0.0, max_value=200.0,
+                    value=float(default_level), step=0.5,
+                    key=f"tariff_level_{row['product_code']}"
+                )
+                new_tariff_val = val
+            elif "points" in per_product_mode:
+                val = st.number_input(
+                    f"{row['product_name']} – Variation (p.p.)",
+                    min_value=-200.0, max_value=200.0,
+                    value=float(default_level - base), step=0.5,
+                    key=f"tariff_points_{row['product_code']}"
+                )
+                new_tariff_val = max(base + val, 0)
+            else:
+                val = st.number_input(
+                    f"{row['product_name']} – Variation relative (%)",
+                    min_value=-1000.0, max_value=1000.0,
+                    value=0.0 if base == 0 else float(round((default_level/base - 1)*100, 1)),
+                    step=0.5,
+                    key=f"tariff_rel_{row['product_code']}"
+                )
+                factor = 1 + (val / 100.0)
+                new_tariff_val = max(base * factor, 0)
+
+            tariff_inputs[row["product_code"]] = new_tariff_val
+
+    # ----- Simulation -----
+    results = []
+    any_change = False
+    any_increase = False  # au moins une hausse de droit
+
+    for _, row in filtered_df.iterrows():
+        original = float(row[market_option])
+        new_tariff = float(tariff_inputs.get(row["product_code"], row["uniform_tariff"]))
+
+        if not any_change and not np.isclose(new_tariff, original, atol=1e-9):
+            any_change = True
+        if new_tariff > original + 1e-9:
+            any_increase = True
+
+        scenario = apply_tariff_change(row, market_option, new_tariff, elast_scale=elast_scale)
+        flow_change = scenario["flow_change"]
+        status = "Gain" if flow_change > 0 else ("Perte" if flow_change < 0 else "Neutre")
+
+        results.append({
+            "Code produit": row["product_code"],
+            "Produit": row["product_name"],
+            "Statut (partenaire)": status,
+            "Tarif initial (%)": scenario["original_tariff"],
+            "Nouveau tarif (%)": scenario["new_tariff"],
+            f"Exports {partner_label} – Référence (M$)": scenario["baseline_flow"],
+            f"Exports {partner_label} – Simulé (M$)": scenario["adjusted_flow"],
+            f"Δ Exports {partner_label} (M$)": flow_change,
+            f"Δ Exports {partner_label} (%)": scenario["flow_change_pct"],
+            "Recettes tarifaires (baseline, M$)": scenario["tariff_revenue_baseline"],
+            "Recettes tarifaires (nouveau, M$)": scenario["tariff_revenue_new"],
+            "Δ Recettes tarifaires (M$)": scenario["tariff_revenue_delta"],
+        })
+
+    results_df = pd.DataFrame(results)
+
+    # ----- KPIs -----
+    delta_export_col = f"Δ Exports {partner_label} (M$)"
+    delta_export_pct_col = f"Δ Exports {partner_label} (%)"
+
+    gains_total   = results_df.loc[results_df[delta_export_col] > 0, delta_export_col].sum()
+    pertes_total  = results_df.loc[results_df[delta_export_col] < 0, delta_export_col].sum()
+    variation_nette = results_df[delta_export_col].sum()
+    avg_change_pct  = results_df[delta_export_pct_col].mean()
+    rev_delta_total = results_df["Δ Recettes tarifaires (M$)"].sum()
+
+    st.markdown("### Synthèse")
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric(f"Gains exports {partner_label}", f"{gains_total:,.0f} M$")
+    c2.metric(f"Pertes exports {partner_label}", f"{pertes_total:,.0f} M$")
+    c3.metric(f"Variation nette exports {partner_label}", f"{variation_nette:+,.0f} M$")
+    c4.metric("Variation moyenne (%)", f"{avg_change_pct:+.1f}%")
+    c5.metric("Δ Recettes tarifaires (importateur)", f"{rev_delta_total:+,.0f} M$")
+
+    # ----- Pertes du partenaire (si droits en hausse) -----
+    st.markdown("### Pertes du partenaire (si droits en hausse)")
+    if any_increase:
+        losses_df = results_df[results_df[delta_export_col] < 0].copy()
+        total_losses = losses_df[delta_export_col].sum()  # négatif
+        st.warning(
+            f"Des hausses de droits ont été détectées. "
+            f"Pertes potentielles agrégées pour le partenaire (exports) : {total_losses:,.0f} M$."
+        )
+        top_n = st.slider("Afficher le Top des pertes (produits)", 3, 20, 10, step=1)
+        cols_show = [
+            "Code produit", "Produit", "Tarif initial (%)", "Nouveau tarif (%)",
+            delta_export_col, delta_export_pct_col
+        ]
+        st.dataframe(losses_df.sort_values(delta_export_col).head(top_n)[cols_show], use_container_width=True)
+        st.download_button(
+            label="Télécharger les pertes potentielles (CSV)",
+            data=losses_df.sort_values(delta_export_col).to_csv(index=False).encode("utf-8"),
+            file_name="pertes_potentielles_exports.csv",
+            mime="text/csv"
+        )
+    else:
+        st.info("Aucune hausse de droits détectée : pas de pertes structurelles attendues pour le partenaire.")
+
+    # ----- Tableau détaillé -----
+    st.markdown("### Impact détaillé par produit")
+    show_only_losses = st.checkbox("Afficher uniquement les produits en perte (exports du partenaire en baisse)")
+    table_df = results_df.copy()
+    if show_only_losses:
+        table_df = table_df[table_df[delta_export_col] < 0]
+
+    def color_status(val):
+        if val == "Gain":  return "background-color:#e6ffed;"
+        if val == "Perte": return "background-color:#ffecec;"
+        return ""
+
+    styled = (
+        table_df.style
+        .apply(lambda s: [color_status(v) for v in s], subset=["Statut (partenaire)"])
+        .format({col: "{:.1f}" for col in table_df.columns if col.endswith("(%)")})
+        .format({col: "{:,.0f}" for col in table_df.columns if col.endswith("(M$)")})
+        .format({"Tarif initial (%)": "{:.1f}", "Nouveau tarif (%)": "{:.1f}"})
+    )
+    st.dataframe(styled, use_container_width=True)
+
+    # ----- Visualisation -----
+    st.markdown("### Visualisation des flux (référence vs simulé)")
+    value_cols = [c for c in results_df.columns if c.endswith("(M$)") and "Δ" not in c]
+    chart_df = results_df[["Produit"] + value_cols].set_index("Produit")
+    st.bar_chart(chart_df)
+
+    # ----- Export global -----
+    st.download_button(
+        label=f"Télécharger tous les résultats (CSV)",
+        data=results_df.to_csv(index=False).encode("utf-8"),
+        file_name="tradeapp_resultats_complets.csv",
+        mime="text/csv"
+    )
+
+    # ----- Implications + recommandations -----
+    st.markdown("### Implications économiques")
+    if any_increase:
+        st.write("- **Exports du partenaire** : baissent sur les lignes où le droit **augmente** (pertes détaillées ci-dessus).")
+    st.write("- **Recettes tarifaires importateur** : peuvent monter si le taux ↑ compense la baisse des volumes, ou baisser si la contraction domine.")
+    st.write("- **Hétérogénéité** : la réaction dépend de l’**élasticité** par produit (réglable via *Sensibilité*).")
+
+    st.markdown("### Recommandations")
+    st.info(recommend_policy_dual(avg_change_pct, country_label, market_raised=any_increase))
+
+    st.caption(
+        "Rappel : les exports du partenaire correspondent aux imports du marché impacté. "
+        "Si {country} augmente ses droits, ses imports baissent, donc les exports du partenaire reculent."
+        .format(country=country_label)
+    )
+
+
+if __name__ == "__main__":
+    main()
