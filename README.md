@@ -2,7 +2,7 @@
 TradeApp v3
 
 Application d’analyse des impacts bilatéraux USA–Chine sur les droits de douane
-🎯 Objectif du projet
+🎯 Objectif du projet: http://localhost:8503/
 
 TradeApp v3 est une application interactive développée avec Streamlit pour simuler les effets économiques des variations de droits de douane entre les États-Unis et la Chine.
 
