@@ -1,1 +1,1 @@
-accès application: http://localhost:8503/
+accès application: localhost:8503
