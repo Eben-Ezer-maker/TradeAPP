@@ -1,45 +1,46 @@
 # TradeAPP
 TradeApp v3
 
-Application d’analyse des impacts bilatéraux USA–Chine sur les droits de douane
-🎯 Objectif du projet: http://localhost:8503/
+Application d’analyse des impacts bilatéraux USA–Chine sur les droits de douane.
 
-TradeApp v3 est une application interactive développée avec Streamlit pour simuler les effets économiques des variations de droits de douane entre les États-Unis et la Chine.
+🌍Contexte:
+Dès son arrivée au pouvoir, Donald Trump a lancé une série de mesures protectionnistes, marquées par une hausse des droits de douane destinés à protéger les industries américaines.
+Ces mesures ont particulièrement ciblé la Chine, déclenchant une véritable guerre commerciale entre les deux puissances.
 
-Elle permet :
+🔍Objectif de l'application:
+C’est dans ce contexte que j’ai développé cette application, afin d’aider les décideurs publics et les analystes économiques à évaluer les impacts des politiques tarifaires et à formuler des recommandations efficaces pour les pays concernés afin d'avoir une éfficacité instantanée.
 
-d’analyser l’impact d’une hausse ou baisse de tarifs douaniers sur les flux d’exportations du partenaire commercial,
-
-d’estimer les recettes tarifaires générées pour le pays importateur,
-
-et de formuler des recommandations stratégiques adaptées selon la situation observée.
 
 🧩 Fonctionnalités principales
 
-Sélection des produits concernés par la mesure.
+-Sélection des produits concernés par la mesure.
 
-Ajustement personnalisé des droits de douane :
+-Ajustement personnalisé des droits de douane :
 
-par points de pourcentage,
+-variation des droits de douanes par points de pourcentage,
 
-en pourcentage relatif,
+-variation des droits de douanes en pourcentage relatif,
 
-ou en valeur directe.
+variation des droits de douane sen valeur directe.
 
-#Simulation automatique des impacts :
+🧭Simulation automatique des impacts :
 
-variation des exportations du partenaire,
+-variation des exportations du partenaire,
 
-variation des recettes tarifaires,
+-variation des recettes tarifaires,
 
-pertes potentielles si hausse des droits.
+-pertes potentielles si hausse des droits.
 
-Visualisations interactives :
+-Visualisations interactives :
 
-graphiques de flux (avant/après),
+-graphiques de flux (avant/après),
 
-tableau détaillé avec codes produits.
+-tableau détaillé avec codes produits.
 
+🧮Recommandations
 Recommandations politiques différenciées selon le pays et le sens de la variation tarifaire.
 
-Export CSV des résultats et des pertes potentielles
+📊 Export CSV 
+Il ya une possiblité d'exporter les résultats après simulations.
+
+🌐Tester l'application ici:http://localhost:8504/
